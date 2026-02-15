@@ -4,94 +4,88 @@ import pandas as pd
 import requests
 import sqlite3
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 
-st.set_page_config(page_title="Pro Quant V9.1", layout="wide")
-st.title("🏛️ Pro Quant: Trend & Dashboard (Fixed)")
+st.set_page_config(page_title="Pro Quant V13", layout="wide")
+st.title("🏛️ Pro Quant: Visual Alert System")
 
-# --- 1. ฟังก์ชันจัดการฐานข้อมูล ---
+# --- 1. ฐานข้อมูล ---
 def init_db():
     conn = sqlite3.connect('portfolio.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   ticker TEXT, entry_price REAL, shares INTEGER, timestamp TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS alert_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  ticker TEXT, type TEXT, pnl_pct REAL, price REAL, timestamp TEXT)''')
     conn.commit()
     conn.close()
 
-def add_to_portfolio(ticker, price):
+def add_alert_history(ticker, alert_type, pnl, price):
     conn = sqlite3.connect('portfolio.db')
     c = conn.cursor()
-    c.execute("INSERT INTO trades (ticker, entry_price, shares, timestamp) VALUES (?, ?, ?, ?)",
-              (ticker, price, 100, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    c.execute("INSERT INTO alert_history (ticker, type, pnl_pct, price, timestamp) VALUES (?, ?, ?, ?, ?)",
+              (ticker, alert_type, pnl, price, datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
     conn.commit()
     conn.close()
 
 init_db()
 
 # --- 2. ส่วนเมนู ---
-watch_list = ['PTT.BK', 'AOT.BK', 'CPALL.BK', 'DELTA.BK', 'NVDA', 'AAPL', 'BTC-USD']
-tab1, tab2, tab3 = st.tabs(["🔍 Market Scanner", "📈 Dashboard & Trends", "⚙️ Setup & Alert"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 Scanner", "📈 Dashboard", "📜 History", "⚙️ Setup"])
+
+with tab4:
+    st.subheader("🔑 Config & Risk")
+    st.session_state.line_token = st.text_input("Channel Access Token", type="password")
+    st.session_state.line_uid = st.text_input("Your User ID", type="password")
+    tp_target = st.slider("เป้าหมายกำไร (%)", 1, 50, 10)
+    sl_target = st.slider("จุดตัดขาดทุน (%)", 1, 20, 5)
 
 with tab1:
-    st.info("กดปุ่ม 'ซื้อ' เพื่อบันทึกหุ้นเข้าพอร์ตจำลอง")
-    
-    # ดึงราคาหุ้นทั้งหมดมาก่อน เพื่อลดการรีโหลดซ้ำซ้อน
-    if st.button("🚀 อัปเดตราคาล่าสุด (Refresh Prices)"):
-        st.session_state.prices_loaded = True
-
-    for s in watch_list:
-        with st.container():
-            # ดึงข้อมูลรายตัว
-            data = yf.download(s, period="1d", progress=False)
+    watch_list = ['PTT.BK', 'AOT.BK', 'CPALL.BK', 'DELTA.BK', 'NVDA', 'AAPL', 'BTC-USD']
+    if st.button("🚀 สแกนหุ้น & ส่งสัญญาณพร้อมกราฟ"):
+        db = sqlite3.connect('portfolio.db')
+        df_trades = pd.read_sql_query("SELECT * FROM trades", db)
+        db.close()
+        
+        for s in watch_list:
+            data = yf.download(s, period="1mo", progress=False)
             if not data.empty:
                 if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
                 curr_price = float(data['Close'].iloc[-1])
+                st.write(f"📈 **{s}**: `{curr_price:,.2f}`")
                 
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"📈 **{s}** ราคาปัจจุบัน: `{curr_price:,.2f}`")
-                with col2:
-                    # ใช้ปุ่มซื้อพร้อมฟังก์ชัน Callback เพื่อความเสถียร
-                    if st.button(f"🛒 ซื้อ {s}", key=f"btn_{s}"):
-                        add_to_portfolio(s, curr_price)
-                        st.success(f"✅ บันทึก {s} ที่ราคา {curr_price} แล้ว! ไปดูที่หน้า Dashboard ได้เลย")
-
-with tab2:
-    db = sqlite3.connect('portfolio.db')
-    df_trades = pd.read_sql_query("SELECT * FROM trades", db)
-    db.close()
-    
-    if not df_trades.empty:
-        st.subheader("📊 สรุปพอร์ตจำลองของคุณ")
-        
-        # ส่วนแสดง Dashboard และกราฟ
-        col_pie, col_line = st.columns([1, 2])
-        with col_pie:
-            fig_pie = px.pie(df_trades, values='entry_price', names='ticker', title="สัดส่วนหุ้นที่ซื้อ")
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-        with col_line:
-            selected = st.selectbox("เลือกดูแนวโน้มหุ้นในพอร์ต:", df_trades['ticker'].unique())
-            hist = yf.download(selected, period="1mo", progress=False)
-            if isinstance(hist.columns, pd.MultiIndex): hist.columns = hist.columns.get_level_values(0)
-            fig_line = px.line(hist, x=hist.index, y='Close', title=f"Trend ของ {selected}")
-            st.plotly_chart(fig_line, use_container_width=True)
-            
-        st.divider()
-        st.write("📋 รายการหุ้นที่บันทึกไว้")
-        st.dataframe(df_trades, use_container_width=True)
-        
-        if st.button("🗑️ ล้างพอร์ตทั้งหมด"):
-            conn = sqlite3.connect('portfolio.db')
-            conn.execute("DELETE FROM trades")
-            conn.commit()
-            conn.close()
-            st.rerun()
-    else:
-        st.warning("⚠️ ยังไม่มีข้อมูลหุ้นในพอร์ต กรุณากดซื้อจากหน้า Scanner ก่อนครับ")
+                if not df_trades.empty and s in df_trades['ticker'].values:
+                    entry = df_trades[df_trades['ticker'] == s]['entry_price'].iloc[-1]
+                    pnl_pct = ((curr_price / entry) - 1) * 100
+                    
+                    if pnl_pct >= tp_target or pnl_pct <= -sl_target:
+                        status = "💰 TAKE PROFIT" if pnl_pct >= tp_target else "⚠️ STOP LOSS"
+                        add_alert_history(s, status, pnl_pct, curr_price)
+                        
+                        # --- ส่ง LINE พร้อมลิงก์กราฟย้อนหลัง ---
+                        chart_url = f"https://finance.yahoo.com/chart/{s}"
+                        alert_msg = f"{status}\nหุ้น: {s}\nกำไร/ขาดทุน: {pnl_pct:.2f}%\nราคาปัจจุบัน: {curr_price}\nดูรายละเอียด: {chart_url}"
+                        
+                        if 'line_token' in st.session_state and 'line_uid' in st.session_state:
+                            url = 'https://api.line.me/v2/bot/message/push'
+                            headers = {
+                                'Content-Type': 'application/json',
+                                'Authorization': f"Bearer {st.session_state.line_token}"
+                            }
+                            # ส่งเป็นข้อความที่มีลิงก์ ซึ่ง LINE จะพรีวิวรูปกราฟให้โดยอัตโนมัติในหลายๆ กรณี
+                            payload = {
+                                'to': st.session_state.line_uid,
+                                'messages': [{'type': 'text', 'text': alert_msg}]
+                            }
+                            requests.post(url, headers=headers, json=payload)
+                            st.warning(f"ส่งสัญญาณพร้อมลิงก์กราฟของ {s} แล้ว!")
 
 with tab3:
-    st.subheader("🔑 LINE Config")
-    st.text_input("Channel Access Token", type="password", key="token_input")
-    st.text_input("Your User ID", type="password", key="uid_input")
+    st.subheader("📜 ประวัติการแจ้งเตือน")
+    db = sqlite3.connect('portfolio.db')
+    df_history = pd.read_sql_query("SELECT * FROM alert_history ORDER BY id DESC", db)
+    db.close()
+    st.dataframe(df_history, use_container_width=True)
