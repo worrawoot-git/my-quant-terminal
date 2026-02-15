@@ -17,7 +17,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   ticker TEXT, entry_price REAL, shares INTEGER, timestamp TEXT)''')
-    defaults = ['PTT.BK', 'CPALL.BK', 'KBANK.BK', 'BTC-USD', 'TSLA']
+    defaults = ['DJI', 'GC=F', 'CL=F', 'BTC-USD', 'SET', 'THB=X','PTT.BK']
     for s in defaults:
         c.execute("INSERT OR IGNORE INTO watchlist (ticker) VALUES (?)", (s,))
     conn.commit()
@@ -104,3 +104,4 @@ with tab2:
         df_sum = df_trades.groupby('ticker').agg({'shares':'sum', 'entry_price':'mean'}).reset_index()
         st.plotly_chart(px.pie(df_sum, values='shares', names='ticker', title="สัดส่วนหุ้นที่ถือครองจริง"), use_container_width=True)
         st.dataframe(df_sum)
+
