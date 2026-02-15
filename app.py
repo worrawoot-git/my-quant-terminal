@@ -17,8 +17,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS trades
 conn.commit()
 conn.close()
 
-# รายชื่อหุ้น
-watch_list = ['NVDA', 'AAPL', 'TSLA', 'BTC-USD', 'PTT.BK', 'DELTA.BK']
+watch_list = ['PTT.BK', 'AOT.BK', 'CPALL.BK', 'DELTA.BK', 'NVDA', 'AAPL', 'BTC-USD']
 
 tab1, tab2, tab3 = st.tabs(["🔍 Market Scanner", "💼 Permanent Portfolio", "⚙️ Setup"])
 
@@ -72,3 +71,4 @@ with tab2:
                 st.error("กรุณากรอกรหัสในหน้า Setup ก่อนส่งเข้า LINE ครับ")
     else:
         st.write("ยังไม่มีข้อมูลหุ้นในพอร์ต")
+
