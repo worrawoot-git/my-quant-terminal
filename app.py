@@ -1,62 +1,97 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from prophet import Prophet
-from datetime import datetime
 import requests
+import sqlite3
+from datetime import datetime
 
-st.set_page_config(page_title="Pro Quant Terminal", layout="wide")
-st.title("🏛️ Pro Quant Mini Bloomberg Terminal")
+st.set_page_config(page_title="Pro Quant Terminal V7", layout="wide")
+st.title("🏛️ Pro Quant: Daily Summary System")
 
-ticker = st.sidebar.text_input("Enter Ticker", value="NVDA").upper().strip()
-period = st.sidebar.selectbox("History Period", ["1y", "2y", "5y"])
-watch_list = ['AAPL', 'NVDA', 'TSLA', 'GOOGL', 'BTC-USD', 'CPALL.BK', 'PTT.BK']
+# --- 🛠️ ฐานข้อมูลเดิมจาก V6 ---
+def init_db():
+    conn = sqlite3.connect('portfolio.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS trades
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  ticker TEXT, entry_price REAL, shares INTEGER, timestamp TEXT)''')
+    conn.commit()
+    conn.close()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Terminal & AI", "🔍 Market Scanner", "📊 YTD Performance", "🧪 Strategy Backtest"])
+def get_trades():
+    conn = sqlite3.connect('portfolio.db')
+    df = pd.read_sql_query("SELECT * FROM trades", conn)
+    conn.close()
+    return df
 
-# --- Tab 2: นี่คือส่วนที่เพิ่มช่องกรอกรหัส ---
+init_db()
+
+# --- ⚙️ ส่วนตั้งค่า ---
+tab1, tab2, tab3 = st.tabs(["🔍 Market Scanner", "💼 Permanent Portfolio", "⚙️ Setup"])
+
+with tab3:
+    st.subheader("LINE Config")
+    token = st.text_input("Channel Access Token", type="password")
+    uid = st.text_input("Your User ID", type="password")
+
+with tab1:
+    # (โค้ด Scanner และปุ่ม Buy จาก V6 ใส่ตรงนี้ได้เหมือนเดิมครับ)
+    st.info("ใช้หน้า Scanner เพื่อเลือกหุ้นเข้าพอร์ตจำลองของคุณ")
+
 with tab2:
-    st.subheader("🔍 Market Scanner & LINE Alert")
+    st.subheader("📊 Your Real-time Portfolio")
+    df_trades = get_trades()
     
-    # เพิ่มช่องกรอกข้อมูลตรงนี้
-    line_access_token = st.text_input("1. วาง Channel Access Token ตรงนี้", type="password")
-    line_user_id = st.text_input("2. วาง Your User ID ตรงนี้ (ที่ขึ้นต้นด้วยตัว U)")
+    if not df_trades.empty:
+        summary_list = []
+        total_pnl = 0
+        
+        with st.spinner('กำลังคำนวณยอดสรุป...'):
+            for _, row in df_trades.iterrows():
+                live = yf.download(row['ticker'], period="1d", progress=False)
+                if isinstance(live.columns, pd.MultiIndex): live.columns = live.columns.get_level_values(0)
+                
+                current_p = live['Close'].iloc[-1]
+                pnl = (current_p - row['entry_price']) * row['shares']
+                pnl_pct = ((current_p / row['entry_price']) - 1) * 100
+                total_pnl += pnl
+                
+                summary_list.append({
+                    'Ticker': row['ticker'],
+                    'Entry': row['entry_price'],
+                    'Current': current_p,
+                    'P/L ($)': pnl,
+                    'P/L (%)': pnl_pct
+                })
+        
+        df_summary = pd.DataFrame(summary_list)
+        st.table(df_summary.style.format({'Entry': '{:.2f}', 'Current': '{:.2f}', 'P/L ($)': '{:.2f}', 'P/L (%)': '{:.2f}%'}))
+        
+        st.metric("Total Profit/Loss", f"${total_pnl:.2f}", delta=f"{total_pnl:.2f}")
 
-    if st.button("🚀 Start Scan & Send to LINE"):
-        if not line_access_token or not line_user_id:
-            st.error("❌ กรุณากรอกรหัสทั้ง 2 ช่องก่อนกดสแกนครับ!")
-        else:
-            results = []
-            alert_stocks = []
-            with st.spinner('กำลังสแกนหุ้นและส่งข้อมูลเข้า LINE...'):
-                for s in watch_list:
-                    d = yf.download(s, period="1mo", progress=False)
-                    if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
-                    
-                    diff = d['Close'].diff()
-                    gain = (diff.where(diff > 0, 0)).rolling(window=14).mean()
-                    loss = (-diff.where(diff < 0, 0)).rolling(window=14).mean()
-                    last_rsi = 100 - (100 / (1 + (gain / loss))).iloc[-1]
-                    
-                    results.append({"Ticker": s, "Price": round(d['Close'].iloc[-1], 2), "RSI": round(last_rsi, 2)})
-                    
-                    # ตั้งค่าให้แจ้งเตือนถ้า RSI < 45 (เพื่อทดสอบการส่งข้อความ)
-                    if last_rsi < 45: 
-                        alert_stocks.append(f"✅ {s}: RSI = {last_rsi:.2f}")
-
-                st.table(pd.DataFrame(results))
-
-                if alert_stocks:
-                    full_msg = "🏛️ Quant Alert!\n" + "\n".join(alert_stocks)
-                    url = 'https://api.line.me/v2/bot/message/push'
-                    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {line_access_token}'}
-                    payload = {'to': line_user_id, 'messages': [{'type': 'text', 'text': full_msg}]}
-                    res = requests.post(url, headers=headers, json=payload)
-                    if res.status_code == 200:
-                        st.success("🔔 บอทส่งข้อความเข้า LINE เรียบร้อยแล้ว!")
-                    else:
-                        st.error(f"Error: {res.text}")
-
-# (ส่วน Tab อื่นๆ คงไว้เหมือนเดิม...)
+        # --- 🔔 ปุ่มส่งสรุปเข้า LINE ---
+        if st.button("📢 ส่งสรุปพอร์ตเข้า LINE ตอนนี้"):
+            if token and uid:
+                now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+                report_msg = f"📋 สรุปพอร์ตรายวัน ({now_str})\n"
+                report_msg += "------------------\n"
+                
+                for _, r in df_summary.iterrows():
+                    icon = "🟢" if r['P/L ($)'] >= 0 else "🔴"
+                    report_msg += f"{icon} {r['Ticker']}: {r['P/L (%)']:.2f}% (${r['P/L ($)']:.2f})\n"
+                
+                report_msg += "------------------\n"
+                report_msg += f"💰 ยอดรวมทั้งหมด: ${total_pnl:.2f}"
+                
+                # ส่งเข้า LINE API
+                url = 'https://api.line.me/v2/bot/message/push'
+                headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
+                payload = {'to': uid, 'messages': [{'type': 'text', 'text': report_msg}]}
+                res = requests.post(url, headers=headers, json=payload)
+                
+                if res.status_code == 200:
+                    st.success("ส่งรายงานสรุปเข้า LINE เรียบร้อยแล้ว!")
+                else:
+                    st.error("ส่งไม่สำเร็จ กรุณาเช็ครหัส Token/User ID")
+            else:
+                st.warning("กรุณากรอกรหัสใน Tab Setup ก่อนครับ")
