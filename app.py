@@ -3,72 +3,74 @@ import yfinance as yf
 import pandas as pd
 import requests
 import sqlite3
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 
-st.set_page_config(page_title="Pro Quant Terminal V7", layout="wide")
-st.title("🏛️ Pro Quant: Daily Summary System")
+st.set_page_config(page_title="Pro Quant V9", layout="wide")
+st.title("🏛️ Pro Quant: Trend & Dashboard")
 
-# --- 1. เตรียมฐานข้อมูล ---
-conn = sqlite3.connect('portfolio.db')
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS trades
-             (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-              ticker TEXT, entry_price REAL, shares INTEGER, timestamp TEXT)''')
-conn.commit()
-conn.close()
+# --- 1. ฐานข้อมูล ---
+def get_trades():
+    db = sqlite3.connect('portfolio.db')
+    df = pd.read_sql_query("SELECT * FROM trades", db)
+    db.close()
+    return df
 
+# --- 2. ส่วนหน้าจอ ---
 watch_list = ['PTT.BK', 'AOT.BK', 'CPALL.BK', 'DELTA.BK', 'NVDA', 'AAPL', 'BTC-USD']
-
-tab1, tab2, tab3 = st.tabs(["🔍 Market Scanner", "💼 Permanent Portfolio", "⚙️ Setup"])
-
-with tab3:
-    st.subheader("LINE Config")
-    token = st.text_input("Channel Access Token", type="password")
-    uid = st.text_input("Your User ID", type="password")
+tab1, tab2, tab3 = st.tabs(["🔍 Market Scanner", "📈 Dashboard & Trends", "⚙️ Setup & Alert"])
 
 with tab1:
-    st.info("ใช้หน้า Scanner เพื่อเลือกหุ้นเข้าพอร์ตจำลองของคุณ")
-    
-    # --- ปรับปรุง: ให้ปุ่มนี้โผล่มาตลอดเวลา ไม่ต้องรอรหัส ---
-    if st.button("🚀 เริ่มต้นสแกนหุ้นเดี๋ยวนี้ (Start Scan)"):
+    st.info("ใช้ปุ่ม Scan เพื่อดูราคาปัจจุบันและบันทึกการซื้อ")
+    if st.button("🚀 เริ่มต้นสแกนหุ้น (Refresh)"):
         for s in watch_list:
-            with st.container():
-                df = yf.download(s, period="1mo", progress=False)
-                if not df.empty:
-                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                    curr_price = df['Close'].iloc[-1]
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"📈 **{s}** ราคาปัจจุบัน: `{curr_price:.2f}`")
-                    with col2:
-                        # ปุ่มซื้อบันทึกลงฐานข้อมูล
-                        if st.button(f"🛒 ซื้อ {s}", key=f"buy_{s}"):
-                            db = sqlite3.connect('portfolio.db')
-                            db.execute("INSERT INTO trades (ticker, entry_price, shares, timestamp) VALUES (?, ?, ?, ?)",
-                                      (s, float(curr_price), 100, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                            db.commit()
-                            db.close()
-                            st.success(f"บันทึก {s} เรียบร้อย!")
+            df = yf.download(s, period="1d", progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+                curr_price = float(df['Close'].iloc[-1])
+                st.write(f"📊 **{s}**: `{curr_price:.2f}`")
+                if st.button(f"🛒 ซื้อ {s}", key=f"buy_{s}"):
+                    db = sqlite3.connect('portfolio.db')
+                    db.execute("INSERT INTO trades (ticker, entry_price, shares, timestamp) VALUES (?, ?, ?, ?)",
+                              (s, curr_price, 100, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    db.commit()
+                    db.close()
+                    st.success(f"บันทึก {s} เรียบร้อย!")
 
 with tab2:
-    st.subheader("📊 Your Portfolio (ข้อมูลในฐานข้อมูล)")
-    # ดึงข้อมูลมาโชว์
-    db = sqlite3.connect('portfolio.db')
-    df_trades = pd.read_sql_query("SELECT * FROM trades", db)
-    db.close()
-    
+    df_trades = get_trades()
     if not df_trades.empty:
-        st.write("หุ้นที่คุณถือครองจำลอง:")
-        st.dataframe(df_trades)
+        st.subheader("📊 ภาพรวมพอร์ตจำลอง")
         
-        # ปุ่มส่งสรุปเข้า LINE
+        # ส่วนกราฟราคาและสัดส่วน
+        col_pie, col_line = st.columns([1, 2])
+        
+        with col_pie:
+            # กราฟวงกลมเดิม
+            fig_pie = px.pie(df_trades, values='entry_price', names='ticker', title="สัดส่วนหุ้น (Entry Cost)")
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        with col_line:
+            # --- ใหม่: กราฟเส้นราคาหุ้นย้อนหลัง ---
+            selected_stock = st.selectbox("เลือกดูแนวโน้มหุ้น:", df_trades['ticker'].unique())
+            hist_df = yf.download(selected_stock, period="1mo", progress=False)
+            if isinstance(hist_df.columns, pd.MultiIndex): hist_df.columns = hist_df.columns.get_level_values(0)
+            
+            fig_line = px.line(hist_df, x=hist_df.index, y='Close', title=f"แนวโน้มราคา {selected_stock} (1 เดือน)")
+            fig_line.update_traces(line_color='#00ff00')
+            st.plotly_chart(fig_line, use_container_width=True)
+        
+        st.divider()
+        st.write("📋 รายละเอียดพอร์ตในฐานข้อมูล")
+        st.dataframe(df_trades, use_container_width=True)
+        
         if st.button("📢 ส่งสรุปเข้า LINE"):
-            if token and uid:
-                # (โค้ดส่ง LINE เหมือนเดิม)
-                st.success("ส่งข้อมูลเข้า LINE สำเร็จ!")
-            else:
-                st.error("กรุณากรอกรหัสในหน้า Setup ก่อนส่งเข้า LINE ครับ")
+            st.info("กำลังประมวลผลการส่งสรุป...")
     else:
-        st.write("ยังไม่มีข้อมูลหุ้นในพอร์ต")
+        st.info("ยังไม่มีข้อมูลหุ้นในมือ ลองไปซื้อหุ้นที่หน้า Scanner ก่อนครับ")
 
+with tab3:
+    st.subheader("🔑 LINE & Alert Setup")
+    token = st.text_input("Channel Access Token", type="password")
+    uid = st.text_input("Your User ID", type="password")
